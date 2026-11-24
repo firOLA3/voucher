@@ -1,4 +1,5 @@
 import json
+import os
 import sqlite3
 import tempfile
 import threading
@@ -17,11 +18,12 @@ from server import (
     admin_dashboard,
     campaign_status,
     create_voucher,
+    get_voucher_question,
     initialize_database,
+    resolve_bind_address,
     update_limit,
     update_voucher_challenge,
     update_voucher_code,
-    get_voucher_question,
 )
 
 
@@ -421,6 +423,18 @@ class EndToEndHttpTests(unittest.TestCase):
 
         status, _, _ = self.api_call("DELETE", "/api/v1/admin/session", cookie=cookie)
         self.assertEqual(status, 200)
+
+    def test_resolve_bind_address_supports_local_and_render_defaults(self):
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(resolve_bind_address(), ("127.0.0.1", 8000))
+        with patch.dict(os.environ, {"RENDER": "true", "PORT": "10000"}, clear=True):
+            self.assertEqual(resolve_bind_address(), ("0.0.0.0", 10000))
+        with patch.dict(
+            os.environ,
+            {"RENDER": "true", "PORT": "10000", "VOUCHER_HOST": "127.0.0.1", "VOUCHER_PORT": "9000"},
+            clear=True,
+        ):
+            self.assertEqual(resolve_bind_address(), ("127.0.0.1", 9000))
 
 
 if __name__ == "__main__":

@@ -26,8 +26,15 @@ MAX_VOUCHER_QUESTION_LENGTH = 512
 MAX_VOUCHER_ANSWER_LENGTH = 256
 ANSWER_HASH_ITERATIONS = 200_000
 SESSION_LIFETIME = 8 * 60 * 60
-SESSION_SECRET = secrets.token_bytes(32)
-COOKIE_SECURE = os.environ.get("VOUCHER_COOKIE_SECURE") == "1"
+SESSION_SECRET = (
+    os.environ["VOUCHER_SESSION_SECRET"].encode("utf-8")
+    if os.environ.get("VOUCHER_SESSION_SECRET")
+    else secrets.token_bytes(32)
+)
+COOKIE_SECURE = (
+    os.environ.get("VOUCHER_COOKIE_SECURE") == "1"
+    or (os.environ.get("VOUCHER_COOKIE_SECURE") != "0" and bool(os.environ.get("RENDER")))
+)
 ADMIN_PASSWORD = os.environ.get("VOUCHER_ADMIN_PASSWORD")
 GENERATED_ADMIN_PASSWORD = not ADMIN_PASSWORD
 if GENERATED_ADMIN_PASSWORD:
@@ -597,12 +604,18 @@ class VoucherHandler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
 
+def resolve_bind_address():
+    default_host = "0.0.0.0" if os.environ.get("RENDER") else "127.0.0.1"
+    host = os.environ.get("VOUCHER_HOST") or default_host
+    port = int(os.environ.get("VOUCHER_PORT") or os.environ.get("PORT") or "8000")
+    return host, port
+
+
 def main():
     initialize_database()
     if GENERATED_ADMIN_PASSWORD:
         print(f"Generated admin password (set VOUCHER_ADMIN_PASSWORD to keep it): {ADMIN_PASSWORD}")
-    host = os.environ.get("VOUCHER_HOST", "127.0.0.1")
-    port = int(os.environ.get("VOUCHER_PORT", "8000"))
+    host, port = resolve_bind_address()
     server = ThreadingHTTPServer((host, port), VoucherHandler)
     print(f"Voucher app running at http://{host}:{port}")
     try:

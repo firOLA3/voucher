@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: convocation-voucher
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
+    healthCheckPath: /api/v1/config
+    disk:
+      name: voucher-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: VOUCHER_DATABASE
+        value: /var/data/vouchers.sqlite3
+      - key: VOUCHER_COOKIE_SECURE
+        value: "1"
+      - key: VOUCHER_SESSION_SECRET
+        generateValue: true
+      - key: VOUCHER_ADMIN_PASSWORD
+        sync: false
