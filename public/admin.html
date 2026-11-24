@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#cf0876">
+    <title>Convocation vouchers · Event team</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body data-page="admin">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="Class of 2026 convocation vouchers">
+        <span class="brand-mark" aria-hidden="true">✦</span>
+        <span>CLASS OF <span class="brand-dot">’26</span></span>
+      </a>
+      <a class="header-link" href="/">← Back to convocation vouchers</a>
+    </header>
+
+    <main class="admin-layout">
+      <section id="admin-login" class="admin-login-card">
+        <div class="eyebrow"><span class="live-dot"></span> EVENT TEAM ACCESS</div>
+        <h1>Welcome<br><span>behind the scenes.</span></h1>
+        <p class="intro">Sign in to manage the Class of 2026 convocation voucher campaign.</p>
+        <form id="login-form" novalidate>
+          <label for="admin-password">Admin password</label>
+          <input id="admin-password" class="admin-password" name="password" type="password" autocomplete="current-password" required>
+          <p id="login-error" class="form-error" role="alert" hidden></p>
+          <button id="login-button" class="button button-primary" type="submit"><span>Sign in</span><span class="button-arrow" aria-hidden="true">→</span></button>
+        </form>
+        <p class="field-hint login-hint">Your admin password is printed when you start the server, unless configured in the environment.</p>
+      </section>
+
+      <section id="admin-dashboard" class="dashboard" hidden>
+        <div class="dashboard-heading">
+          <div>
+            <div class="eyebrow"><span class="live-dot"></span> CONVOCATION CAMPAIGN</div>
+            <h1>Your celebration,<br><span>in numbers.</span></h1>
+          </div>
+          <button id="logout-button" class="button button-quiet" type="button">Sign out</button>
+        </div>
+        <div class="metric-grid">
+          <article class="metric-card metric-primary">
+            <span class="metric-label">Vouchers created</span>
+            <strong id="metric-issued" class="metric-value">—</strong>
+            <span id="metric-progress" class="metric-footnote">Loading campaign…</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Still available</span>
+            <strong id="metric-remaining" class="metric-value">—</strong>
+            <span class="metric-footnote">From your total campaign limit</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Campaign timing</span>
+            <strong id="metric-time" class="metric-value metric-time">—</strong>
+            <span id="metric-time-caption" class="metric-footnote">Time to fill the voucher pool</span>
+          </article>
+          <article class="metric-card">
+            <span class="metric-label">Average pace</span>
+            <strong id="metric-rate" class="metric-value">—</strong>
+            <span class="metric-footnote">Vouchers per hour between first and latest</span>
+          </article>
+        </div>
+
+        <section class="admin-panel limit-panel">
+          <div class="panel-heading">
+            <div><p class="panel-kicker">CAMPAIGN SETTINGS</p><h2>Set the voucher limit</h2></div>
+            <span id="campaign-status" class="status-pill">Live</span>
+          </div>
+          <form id="limit-form" class="limit-form" novalidate>
+            <label for="voucher-limit">Maximum vouchers</label>
+            <div class="limit-controls">
+              <input id="voucher-limit" type="number" min="1" max="1000000" step="1" required>
+              <button id="save-limit" class="button button-primary button-small" type="submit">Save limit</button>
+            </div>
+            <p id="limit-feedback" class="inline-feedback" aria-live="polite">The limit cannot be lower than vouchers already created.</p>
+          </form>
+          <div class="admin-progress-track"><div id="admin-progress" class="progress-fill"></div></div>
+        </section>
+
+        <section class="admin-panel voucher-code-panel">
+          <div class="panel-heading">
+            <div><p class="panel-kicker">SHARED CLAIM CODE</p><h2>Set the voucher code</h2></div>
+            <span id="voucher-code-status" class="status-pill">Not set</span>
+          </div>
+          <form id="voucher-code-form" class="voucher-code-form" novalidate>
+            <label for="voucher-code-setting">Shared voucher code visitors will enter</label>
+            <div class="voucher-code-controls">
+              <input id="voucher-code-setting" class="voucher-code-input" type="text" maxlength="256" autocomplete="off" spellcheck="false" placeholder="Enter any code you choose" aria-describedby="voucher-code-hint">
+              <button id="save-voucher-code" class="button button-primary button-small" type="submit">Save voucher code</button>
+            </div>
+            <p id="voucher-code-hint" class="inline-feedback">Any characters are allowed, including spaces and symbols. Visitors must enter the exact same code.</p>
+            <p id="voucher-code-feedback" class="inline-feedback" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <section class="admin-panel voucher-challenge-panel">
+          <div class="panel-heading">
+            <div><p class="panel-kicker">CLAIM VERIFICATION</p><h2>Add a question and answer</h2></div>
+            <span id="voucher-challenge-status" class="status-pill">Not set</span>
+          </div>
+          <form id="voucher-challenge-form" class="voucher-challenge-form" novalidate>
+            <label for="voucher-question-setting">Question visitors must answer</label>
+            <textarea id="voucher-question-setting" class="voucher-challenge-input" maxlength="512" rows="2" placeholder="e.g. What is the name of the graduating faculty?" aria-describedby="voucher-challenge-hint"></textarea>
+            <label for="voucher-answer-setting">Correct answer</label>
+            <div class="input-action-wrap">
+              <input id="voucher-answer-setting" class="voucher-challenge-input" type="password" maxlength="256" autocomplete="new-password" placeholder="Enter the answer">
+              <button id="toggle-answer-visibility" class="button button-quiet toggle-visibility" type="button" aria-controls="voucher-answer-setting" aria-pressed="false">Show</button>
+            </div>
+            <p id="voucher-challenge-hint" class="inline-feedback">After entering the shared voucher code, visitors will answer this question before their voucher is created. The answer is stored securely and isn't shown in the dashboard.</p>
+            <button id="save-voucher-challenge" class="button button-primary button-small" type="submit">Save question and answer</button>
+            <p id="voucher-challenge-feedback" class="inline-feedback" aria-live="polite"></p>
+          </form>
+        </section>
+
+        <section class="admin-panel activity-panel">
+          <div class="panel-heading">
+            <div><p class="panel-kicker">LATEST CLAIMS</p><h2>Recent vouchers</h2></div>
+            <span id="last-updated" class="updated-label">Updating live</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>Voucher code</th><th>Created</th><th>Status</th></tr></thead>
+              <tbody id="recent-vouchers"></tbody>
+            </table>
+            <p id="empty-vouchers" class="empty-state" hidden>No vouchers created yet. Your first claim will show up here.</p>
+          </div>
+        </section>
+        <p id="dashboard-error" class="dashboard-error" role="alert" hidden></p>
+      </section>
+    </main>
+    <footer class="site-footer"><span>Class of 2026 · Event team</span><span>Updates automatically every 5 seconds</span></footer>
+  </body>
+</html>
