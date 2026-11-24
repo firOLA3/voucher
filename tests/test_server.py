@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import sqlite3
@@ -11,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
+from wsgiref.util import setup_testing_defaults
 
 from server import (
     VoucherError,
@@ -24,6 +26,7 @@ from server import (
     update_limit,
     update_voucher_challenge,
     update_voucher_code,
+    wsgi_application,
 )
 
 
@@ -435,6 +438,98 @@ class EndToEndHttpTests(unittest.TestCase):
             clear=True,
         ):
             self.assertEqual(resolve_bind_address(), ("127.0.0.1", 9000))
+
+
+class WsgiApplicationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.database = Path(self.temp_dir.name) / "wsgi.sqlite3"
+        initialize_database(self.database, initial_limit=2)
+        self.patches = [
+            patch("server.DATABASE_PATH", self.database),
+            patch("server.ANSWER_HASH_ITERATIONS", 1000),
+            patch("server.ADMIN_PASSWORD", "wsgi-admin-secret"),
+        ]
+        for active_patch in self.patches:
+            active_patch.start()
+
+    def tearDown(self):
+        for active_patch in reversed(self.patches):
+            active_patch.stop()
+        self.temp_dir.cleanup()
+
+    def call_wsgi(self, method, path, payload=None, cookie=None, scheme="https"):
+        environ = {}
+        setup_testing_defaults(environ)
+        environ["REQUEST_METHOD"] = method
+        environ["PATH_INFO"] = path
+        environ["wsgi.url_scheme"] = scheme
+        if payload is not None:
+            raw = json.dumps(payload).encode("utf-8")
+            environ["CONTENT_LENGTH"] = str(len(raw))
+            environ["CONTENT_TYPE"] = "application/json"
+            environ["wsgi.input"] = io.BytesIO(raw)
+        else:
+            environ["CONTENT_LENGTH"] = ""
+            environ["wsgi.input"] = io.BytesIO(b"")
+        if cookie:
+            environ["HTTP_COOKIE"] = cookie
+
+        captured = {}
+
+        def start_response(status, headers):
+            captured["status"] = int(status.split(" ", 1)[0])
+            captured["headers"] = headers
+
+        body = b"".join(wsgi_application(environ, start_response))
+        return captured["status"], captured["headers"], body
+
+    def test_wsgi_application_serves_pages_and_full_claim_flow(self):
+        status, _, html = self.call_wsgi("GET", "/")
+        self.assertEqual(status, 200)
+        self.assertIn(b"voucher", html.lower())
+
+        status, _, head_body = self.call_wsgi("HEAD", "/api/v1/config")
+        self.assertEqual(status, 200)
+        self.assertEqual(head_body, b"")
+
+        status, headers, raw_body = self.call_wsgi(
+            "POST", "/api/v1/admin/session", {"password": "wsgi-admin-secret"}, scheme="https"
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(raw_body)["authenticated"])
+        set_cookie = dict(headers)["Set-Cookie"]
+        self.assertIn("; Secure", set_cookie)
+        cookie = set_cookie.split(";", 1)[0]
+
+        status, _, _ = self.call_wsgi("PUT", "/api/v1/admin/voucher-code", {"code": "PA-2026"}, cookie)
+        self.assertEqual(status, 200)
+        status, _, _ = self.call_wsgi(
+            "PUT",
+            "/api/v1/admin/voucher-challenge",
+            {"question": "Host city?", "answer": "Lagos"},
+            cookie,
+        )
+        self.assertEqual(status, 200)
+
+        status, _, q_body = self.call_wsgi("POST", "/api/v1/voucher-question", {"code": "PA-2026"})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(q_body), {"question": "Host city?"})
+
+        status, _, bad = self.call_wsgi(
+            "POST", "/api/v1/vouchers", {"code": "PA-2026", "answer": "Abuja"}
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(bad)["error"], "incorrect_answer")
+
+        status, _, good = self.call_wsgi(
+            "POST", "/api/v1/vouchers", {"code": "PA-2026", "answer": "lagos"}
+        )
+        self.assertEqual(status, 201)
+        self.assertEqual(json.loads(good)["voucher"]["code"], "PA-2026")
+
+        status, _, _ = self.call_wsgi("PATCH", "/api/v1/config")
+        self.assertEqual(status, 405)
 
 
 if __name__ == "__main__":

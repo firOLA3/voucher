@@ -431,12 +431,34 @@ def admin_dashboard(path=None):
     }
 
 
-def make_session_cookie():
+STATIC_ROUTES = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/admin": ("admin.html", "text/html; charset=utf-8"),
+    "/styles.css": ("styles.css", "text/css; charset=utf-8"),
+    "/app.js": ("app.js", "text/javascript; charset=utf-8"),
+    "/convocation-invitation.jpg": ("convocation-invitation.jpg", "image/jpeg"),
+}
+
+
+def should_use_secure_cookie(is_https=False):
+    if os.environ.get("VOUCHER_COOKIE_SECURE") == "0":
+        return False
+    return COOKIE_SECURE or bool(is_https)
+
+
+def make_session_cookie(is_https=False):
     expires = int(time.time()) + SESSION_LIFETIME
     value = str(expires)
     signature = hmac.new(SESSION_SECRET, value.encode("ascii"), hashlib.sha256).hexdigest()
     cookie = f"voucher_admin={value}.{signature}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_LIFETIME}"
-    if COOKIE_SECURE:
+    if should_use_secure_cookie(is_https):
+        cookie += "; Secure"
+    return cookie
+
+
+def clear_session_cookie(is_https=False):
+    cookie = "voucher_admin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+    if should_use_secure_cookie(is_https):
         cookie += "; Secure"
     return cookie
 
@@ -457,48 +479,63 @@ def has_admin_session(cookie_header):
         return False
 
 
-class VoucherHandler(BaseHTTPRequestHandler):
-    server_version = "VoucherApp/1.0"
+def json_response(status, payload, extra_headers=None):
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    headers = [
+        ("Content-Type", "application/json; charset=utf-8"),
+        ("Content-Length", str(len(body))),
+        ("Cache-Control", "no-store"),
+    ]
+    if extra_headers:
+        headers.extend(extra_headers)
+    return int(status), headers, body
 
-    def log_message(self, format_string, *args):
-        print(f"{self.address_string()} - {format_string % args}")
 
-    def send_json(self, status, payload, headers=None):
-        body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        if headers:
-            for key, value in headers.items():
-                self.send_header(key, value)
-        self.end_headers()
-        self.wfile.write(body)
+def static_response(file_name, content_type):
+    content = (PUBLIC_DIR / file_name).read_bytes()
+    headers = [
+        ("Content-Type", content_type),
+        ("Content-Length", str(len(content))),
+        ("Cache-Control", "no-cache"),
+    ]
+    return int(HTTPStatus.OK), headers, content
 
-    def read_json(self):
-        try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if length < 1 or length > 8192:
-                raise ValueError
-            payload = json.loads(self.rfile.read(length))
-            if not isinstance(payload, dict):
-                raise ValueError
-            return payload
-        except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
-            raise VoucherError(HTTPStatus.BAD_REQUEST, "invalid_json", "Please send a valid request.")
 
-    def require_admin(self):
-        if not has_admin_session(self.headers.get("Cookie")):
-            self.send_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized", "message": "Please sign in again."})
-            return False
-        return True
+def parse_json_body(content_length_header, read_bytes_fn):
+    try:
+        length = int(content_length_header or "0")
+        if length < 1 or length > 8192:
+            raise ValueError
+        payload = json.loads(read_bytes_fn(length))
+        if not isinstance(payload, dict):
+            raise ValueError
+        return payload
+    except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+        raise VoucherError(HTTPStatus.BAD_REQUEST, "invalid_json", "Please send a valid request.")
 
-    def do_GET(self):
-        path = urlparse(self.path).path
-        try:
+
+def dispatch_request(
+    method,
+    raw_path,
+    cookie_header="",
+    content_length_header="0",
+    read_bytes_fn=lambda _n: b"",
+    is_https=False,
+    log_error_fn=None,
+):
+    path = urlparse(raw_path).path
+
+    def unauthorized():
+        return json_response(
+            HTTPStatus.UNAUTHORIZED,
+            {"error": "unauthorized", "message": "Please sign in again."},
+        )
+
+    try:
+        if method in ("GET", "HEAD"):
             if path == "/api/v1/config":
                 status = campaign_status()
-                self.send_json(
+                response = json_response(
                     HTTPStatus.OK,
                     {
                         "available": status["available"],
@@ -506,102 +543,142 @@ class VoucherHandler(BaseHTTPRequestHandler):
                     },
                 )
             elif path == "/api/v1/admin/dashboard":
-                if self.require_admin():
-                    self.send_json(HTTPStatus.OK, admin_dashboard())
-            elif path in ("/", "/admin"):
-                file_name = "admin.html" if path == "/admin" else "index.html"
-                self.send_static(file_name, "text/html; charset=utf-8")
-            elif path == "/styles.css":
-                self.send_static("styles.css", "text/css; charset=utf-8")
-            elif path == "/app.js":
-                self.send_static("app.js", "text/javascript; charset=utf-8")
-            elif path == "/convocation-invitation.jpg":
-                self.send_static("convocation-invitation.jpg", "image/jpeg")
+                if not has_admin_session(cookie_header):
+                    response = unauthorized()
+                else:
+                    response = json_response(HTTPStatus.OK, admin_dashboard())
+            elif path in STATIC_ROUTES:
+                file_name, content_type = STATIC_ROUTES[path]
+                response = static_response(file_name, content_type)
             else:
-                self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found", "message": "Not found."})
-        except (OSError, sqlite3.Error):
-            self.log_error("GET %s failed", path)
-            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "server_error", "message": "Something went wrong. Please try again."})
+                response = json_response(HTTPStatus.NOT_FOUND, {"error": "not_found", "message": "Not found."})
+            if method == "HEAD":
+                return response[0], response[1], b""
+            return response
 
-    def do_POST(self):
-        path = urlparse(self.path).path
-        try:
-            payload = self.read_json()
+        if method == "POST":
+            payload = parse_json_body(content_length_header, read_bytes_fn)
             if path == "/api/v1/vouchers":
                 result = create_voucher(payload.get("code"), payload.get("answer"))
-                self.send_json(HTTPStatus.CREATED, {"voucher": result})
-            elif path == "/api/v1/voucher-question":
+                return json_response(HTTPStatus.CREATED, {"voucher": result})
+            if path == "/api/v1/voucher-question":
                 question = get_voucher_question(payload.get("code"))
-                self.send_json(HTTPStatus.OK, {"question": question})
-            elif path == "/api/v1/admin/session":
+                return json_response(HTTPStatus.OK, {"question": question})
+            if path == "/api/v1/admin/session":
                 password = payload.get("password")
                 if not isinstance(password, str) or not hmac.compare_digest(
                     password.encode("utf-8"),
                     ADMIN_PASSWORD.encode("utf-8"),
                 ):
-                    self.send_json(HTTPStatus.UNAUTHORIZED, {"error": "invalid_credentials", "message": "That password doesn't look right. Try again."})
-                    return
-                self.send_json(
+                    return json_response(
+                        HTTPStatus.UNAUTHORIZED,
+                        {"error": "invalid_credentials", "message": "That password doesn't look right. Try again."},
+                    )
+                return json_response(
                     HTTPStatus.OK,
                     {"authenticated": True},
-                    {"Set-Cookie": make_session_cookie()},
+                    [("Set-Cookie", make_session_cookie(is_https))],
                 )
-            else:
-                self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found", "message": "Not found."})
-        except VoucherError as error:
-            self.send_json(error.status, {"error": error.code, "message": error.message})
-        except (OSError, sqlite3.Error):
-            self.log_error("POST %s failed", path)
-            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "server_error", "message": "Something went wrong. Please try again."})
+            return json_response(HTTPStatus.NOT_FOUND, {"error": "not_found", "message": "Not found."})
+
+        if method == "PUT":
+            if path not in (
+                "/api/v1/admin/settings",
+                "/api/v1/admin/voucher-code",
+                "/api/v1/admin/voucher-challenge",
+            ):
+                return json_response(HTTPStatus.NOT_FOUND, {"error": "not_found", "message": "Not found."})
+            if not has_admin_session(cookie_header):
+                return unauthorized()
+            payload = parse_json_body(content_length_header, read_bytes_fn)
+            if path == "/api/v1/admin/settings":
+                return json_response(HTTPStatus.OK, update_limit(payload.get("limit")))
+            if path == "/api/v1/admin/voucher-code":
+                return json_response(HTTPStatus.OK, {"voucherCode": update_voucher_code(payload.get("code"))})
+            question = update_voucher_challenge(payload.get("question"), payload.get("answer"))
+            return json_response(HTTPStatus.OK, {"voucherQuestion": question})
+
+        if method == "DELETE":
+            if path != "/api/v1/admin/session":
+                return json_response(HTTPStatus.NOT_FOUND, {"error": "not_found", "message": "Not found."})
+            return json_response(
+                HTTPStatus.OK,
+                {"authenticated": False},
+                [("Set-Cookie", clear_session_cookie(is_https))],
+            )
+
+        return json_response(
+            HTTPStatus.METHOD_NOT_ALLOWED,
+            {"error": "method_not_allowed", "message": "Method not allowed."},
+        )
+    except VoucherError as error:
+        return json_response(error.status, {"error": error.code, "message": error.message})
+    except (OSError, sqlite3.Error):
+        if log_error_fn:
+            log_error_fn("%s %s failed", method, path)
+        return json_response(
+            HTTPStatus.INTERNAL_SERVER_ERROR,
+            {"error": "server_error", "message": "Something went wrong. Please try again."},
+        )
+
+
+def wsgi_application(environ, start_response):
+    method = environ.get("REQUEST_METHOD", "GET").upper()
+    raw_path = environ.get("PATH_INFO") or "/"
+    forwarded_proto = environ.get("HTTP_X_FORWARDED_PROTO", "").split(",")[0].strip().lower()
+    is_https = environ.get("wsgi.url_scheme", "").lower() == "https" or forwarded_proto == "https"
+    body_stream = environ.get("wsgi.input")
+    status_code, headers, body = dispatch_request(
+        method=method,
+        raw_path=raw_path,
+        cookie_header=environ.get("HTTP_COOKIE", ""),
+        content_length_header=environ.get("CONTENT_LENGTH", "0"),
+        read_bytes_fn=body_stream.read if body_stream else (lambda _n: b""),
+        is_https=is_https,
+    )
+    status_phrase = HTTPStatus(status_code).phrase
+    start_response(f"{status_code} {status_phrase}", headers)
+    return [body]
+
+
+class VoucherHandler(BaseHTTPRequestHandler):
+    server_version = "VoucherApp/1.0"
+
+    def log_message(self, format_string, *args):
+        print(f"{self.address_string()} - {format_string % args}")
+
+    def handle_dispatch(self):
+        forwarded_proto = self.headers.get("X-Forwarded-Proto", "").split(",")[0].strip().lower()
+        status_code, headers, body = dispatch_request(
+            method=self.command,
+            raw_path=self.path,
+            cookie_header=self.headers.get("Cookie", ""),
+            content_length_header=self.headers.get("Content-Length", "0"),
+            read_bytes_fn=self.rfile.read,
+            is_https=forwarded_proto == "https",
+            log_error_fn=self.log_error,
+        )
+        self.send_response(status_code)
+        for key, value in headers:
+            self.send_header(key, value)
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+
+    def do_GET(self):
+        self.handle_dispatch()
+
+    def do_HEAD(self):
+        self.handle_dispatch()
+
+    def do_POST(self):
+        self.handle_dispatch()
 
     def do_PUT(self):
-        path = urlparse(self.path).path
-        if path not in (
-            "/api/v1/admin/settings",
-            "/api/v1/admin/voucher-code",
-            "/api/v1/admin/voucher-challenge",
-        ):
-            self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found", "message": "Not found."})
-            return
-        if not self.require_admin():
-            return
-        try:
-            payload = self.read_json()
-            if path == "/api/v1/admin/settings":
-                result = update_limit(payload.get("limit"))
-                self.send_json(HTTPStatus.OK, result)
-            elif path == "/api/v1/admin/voucher-code":
-                code = update_voucher_code(payload.get("code"))
-                self.send_json(HTTPStatus.OK, {"voucherCode": code})
-            else:
-                question = update_voucher_challenge(
-                    payload.get("question"),
-                    payload.get("answer"),
-                )
-                self.send_json(HTTPStatus.OK, {"voucherQuestion": question})
-        except VoucherError as error:
-            self.send_json(error.status, {"error": error.code, "message": error.message})
-        except (OSError, sqlite3.Error):
-            self.log_error("PUT %s failed", path)
-            self.send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "server_error", "message": "Something went wrong. Please try again."})
+        self.handle_dispatch()
 
     def do_DELETE(self):
-        if urlparse(self.path).path != "/api/v1/admin/session":
-            self.send_json(HTTPStatus.NOT_FOUND, {"error": "not_found", "message": "Not found."})
-            return
-        cookie = "voucher_admin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
-        if COOKIE_SECURE:
-            cookie += "; Secure"
-        self.send_json(HTTPStatus.OK, {"authenticated": False}, {"Set-Cookie": cookie})
-
-    def send_static(self, file_name, content_type):
-        content = (PUBLIC_DIR / file_name).read_bytes()
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "no-cache")
-        self.end_headers()
-        self.wfile.write(content)
+        self.handle_dispatch()
 
 
 def resolve_bind_address():
