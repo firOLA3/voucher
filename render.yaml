@@ -1,21 +1,24 @@
 services:
   - type: web
-    name: convocation-voucher
-    runtime: python
-    plan: starter
-    buildCommand: pip install -r requirements.txt
-    startCommand: python server.py
+    name: convocation-voucher-api
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
     healthCheckPath: /api/v1/config
-    disk:
-      name: voucher-data
-      mountPath: /var/data
-      sizeGB: 1
     envVars:
-      - key: VOUCHER_DATABASE
-        value: /var/data/vouchers.sqlite3
-      - key: VOUCHER_COOKIE_SECURE
-        value: "1"
-      - key: VOUCHER_SESSION_SECRET
-        generateValue: true
+      - key: NODE_ENV
+        value: production
+      - key: MONGODB_URI
+        sync: false
+      - key: CORS_ORIGIN
+        sync: false
       - key: VOUCHER_ADMIN_PASSWORD
         sync: false
+      - key: VOUCHER_SESSION_SECRET
+        generateValue: true
+      - key: VOUCHER_COOKIE_SAMESITE
+        value: none
+      - key: VOUCHER_COOKIE_SECURE
+        value: "1"
